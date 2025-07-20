@@ -26,6 +26,14 @@ export default [
         },
         plugins: plugins,
     },
+    {
+        input: "src/index.ts",
+        output: {
+            file: "dist/moonshine.cjs.js",
+            format: "cjs",
+        },
+        plugins: plugins,
+    },
     // // manual moonshine-ify from CDN
     // {
     //     input: "src/manual.ts",
