@@ -32,7 +32,14 @@ export default class MoonshineModel {
      *
      * @remarks Creating a MoonshineModel has the side effect of setting the path to the `onnxruntime-web` `.wasm` to the {@link Settings.BASE_ASSET_PATH}
      */
-    public constructor(modelURL: string, precision: string = "quantized") {
+    public constructor(inputModelURL: string, precision: string = "quantized") {
+        // Switch to per-language naming convention for English models.
+        let modelURL = inputModelURL;
+        if (modelURL === "model/tiny") {
+            modelURL = "model/tiny-en";
+        } else if (modelURL === "model/base") {
+            modelURL = "model/base-en";
+        }
         this.modelURL = Settings.BASE_ASSET_PATH.MOONSHINE + modelURL;
         this.precision = precision;
         ort.env.wasm.wasmPaths = Settings.BASE_ASSET_PATH.ONNX_RUNTIME;
@@ -146,15 +153,15 @@ export default class MoonshineModel {
             );
 
             this.model.encoder = await ort.InferenceSession.create(
-                this.modelURL + "/" + this.precision + "/encoder_model.onnx",
+                this.modelURL + "/" + this.precision + "/encoder_model.ort",
                 sessionOption
             );
 
             this.model.decoder = await ort.InferenceSession.create(
                 this.modelURL +
-                    "/" +
-                    this.precision +
-                    "/decoder_model_merged.onnx",
+                "/" +
+                this.precision +
+                "/decoder_model_merged.ort",
                 sessionOption
             );
             this.isModelLoading = false;
@@ -194,14 +201,30 @@ export default class MoonshineModel {
     public async generate(audio: Float32Array): Promise<string> {
         if (this.isLoaded()) {
             const t0 = performance.now();
-            const maxLen = Math.trunc((audio.length / 16000) * 6);
+            const maxLen = Math.trunc(audio.length / 16000 * 14);
 
-            const encoderOutput = await this.model.encoder.run({
+            // Check for repetitive ending in the audio
+            var encoderInput = {
                 input_values: new ort.Tensor("float32", audio, [
                     1,
                     audio.length,
                 ]),
-            });
+            };
+            // Newer optimum exporters add an attention mask input.
+            var encoderAttentionMask = undefined;
+            if (this.model.encoder.inputNames.includes("attention_mask")) {
+                var maskData = new BigInt64Array(audio.length);
+                maskData.fill(BigInt(1));
+                encoderAttentionMask = new ort.Tensor("int64", maskData, [
+                    1,
+                    audio.length,
+                ]);
+                Object.assign(encoderInput, {
+                    attention_mask: encoderAttentionMask,
+                });
+            }
+
+            const encoderOutput = await this.model.encoder.run(encoderInput);
 
             var pastKeyValues = Object.fromEntries(
                 Array.from({ length: this.shape.numLayers }, (_, i) =>
@@ -236,6 +259,11 @@ export default class MoonshineModel {
                     encoder_hidden_states: encoderOutput.last_hidden_state,
                     use_cache_branch: new ort.Tensor("bool", [i > 0]),
                 };
+                if (encoderAttentionMask) {
+                    Object.assign(decoderInput, {
+                        encoder_attention_mask: encoderAttentionMask,
+                    });
+                }
                 Object.assign(decoderInput, pastKeyValues);
                 var decoderOutput = await this.model.decoder.run(decoderInput);
 

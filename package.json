@@ -11,6 +11,7 @@
   "author": "Moonshine AI",
   "license": "MIT",
   "dependencies": {
+    "@gooney-001/ten-vad-lib": "^1.0.2",
     "@huggingface/transformers": "^3.3.3",
     "@ricky0123/vad-web": "file:../vad-moonshine/packages/web",
     "llama-tokenizer-js": "^1.2.2",
