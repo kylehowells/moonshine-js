@@ -14,10 +14,10 @@ class MediaElementTranscriber extends Transcriber {
         mediaElement: HTMLMediaElement,
         modelURL: string,
         callbacks: Partial<TranscriberCallbacks> = {},
-        useVAD: boolean = true,
+        partialUpdates: boolean = true,
         precision: string = "quantized"
     ) {
-        super(modelURL, callbacks, useVAD, precision);
+        super(modelURL, callbacks, partialUpdates, precision);
         this.mediaElement = mediaElement;
         this.mediaElement.addEventListener("play", () => {
             this.start();
@@ -61,14 +61,14 @@ class VideoCaptioner extends MediaElementTranscriber {
     public constructor(
         videoElement: HTMLVideoElement,
         modelURL: string,
-        useVAD: boolean = false,
+        partialUpdates: boolean = true,
         wrapperStyle: Partial<CSSStyleDeclaration> = {},
         captionsStyle: Partial<CSSStyleDeclaration> = {},
         commitElementStyle: Partial<CSSStyleDeclaration> = {},
         updateElementStyle: Partial<CSSStyleDeclaration> = {},
         precision: string = "quantized"
     ) {
-        super(videoElement, modelURL, {}, useVAD, precision);
+        super(videoElement, modelURL, {}, partialUpdates, precision);
 
         const parentHeight = videoElement.clientHeight;
         const parentWidth = videoElement.clientWidth;
@@ -158,7 +158,7 @@ class VideoCaptioner extends MediaElementTranscriber {
         }
 
         this.callbacks.onTranscriptionUpdated = function (text) {
-            if (text && !useVAD) {
+            if (text && partialUpdates) {
                 setCaption(text, 60, 2);
             }
         };

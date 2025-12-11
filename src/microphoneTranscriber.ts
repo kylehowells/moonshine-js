@@ -44,7 +44,7 @@ class MicrophoneTranscriber extends Transcriber {
      *              );
      *          },
      *      },
-     *      false // use streaming mode
+     *      true // use streaming mode
      * );
      *
      * transcriber.start();
@@ -53,10 +53,10 @@ class MicrophoneTranscriber extends Transcriber {
     public constructor(
         modelURL: string,
         callbacks: Partial<TranscriberCallbacks> = {},
-        useVAD: boolean = true,
+        partialUpdates: boolean = true,
         precision: string = "quantized"
     ) {
-        super(modelURL, callbacks, useVAD, precision);
+        super(modelURL, callbacks, partialUpdates, precision);
     }
 
     /**

@@ -7,16 +7,17 @@ const vadCommitSeconds = 10
  */
 export const Settings = {
     FRAME_SIZE: frameSize, // as specified by silero v5; changing this is not recommended
-    STREAM_UPDATE_INTERVAL: updateInterval,
-    STREAM_COMMIT_MIN_INTERVAL: updateInterval * 4,
-    STREAM_COMMIT_MAX_INTERVAL: updateInterval * 8,
-    STREAM_COMMIT_EMA_THRESHOLD: 0.5,
-    STREAM_COMMIT_EMA_PERIOD: 5,
-    VAD_COMMIT_INTERVAL: Math.ceil((vadCommitSeconds * 10000) / frameSize),
+    TEN_VAD_FRAME_SIZE: 256,
+    TEN_VAD_THRESHOLD: 0.5,
+    VAD_PROBABILITY_WINDOW_SIZE: 32, // in frames
+    VAD_LOOK_BEHIND_SAMPLE_COUNT: 8192,
+    STT_MINIMUM_INTERVAL_MS: 200, // Don't run the STT model more than once every 200ms.
+    SPEECH_MAX_DURATION_MS: 30000, // After this duration of continuous speech, the transcriber will commit the transcription regardless of whether the user is still speaking.
     BASE_ASSET_PATH: {
         MOONSHINE: "https://download.moonshine.ai/",
         ONNX_RUNTIME: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
-        SILERO_VAD: "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.24/dist/"
+        TEN_VAD_WASM: "https://download.moonshine.ai/scripts/",
+        AUDIO_WORKLET: "https://download.moonshine.ai/scripts/audio-capture.worklet.js"
     },
     VERBOSE_LOGGING: false
 }

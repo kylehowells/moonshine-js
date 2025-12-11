@@ -21,11 +21,11 @@ abstract class VoiceController implements TranscriberCallbacks {
     onModelLoaded: () => any;
     onTranscribeStarted: () => any;
     onTranscribeStopped: () => any;
-    onTranscriptionCommitted: (text: string) => any;
-    onTranscriptionUpdated: (text: string) => any;
-    onFrame: (probs, frame, ema) => any;
+    onTranscriptionCommitted: (text: string, audio: Float32Array) => any;
+    onTranscriptionUpdated: (text: string, audio: Float32Array) => any;
     onSpeechStart: () => any;
-    onSpeechEnd: () => any;
+    onSpeechEnd: (audio: Float32Array) => any;
+    onSpeechContinuing: (audio: Float32Array) => any;
 
     public constructor(
         commandHandlers: CommandHandlers,
@@ -67,11 +67,6 @@ abstract class VoiceController implements TranscriberCallbacks {
             function () {
                 Log.log("VoiceController.onTranscriptionCommitted()");
             };
-        this.onFrame =
-            callbacks.onFrame ??
-            function () {
-                Log.log("VoiceController.onFrame()");
-            };
         this.onSpeechStart =
             callbacks.onSpeechStart ??
             function () {
@@ -81,6 +76,11 @@ abstract class VoiceController implements TranscriberCallbacks {
             callbacks.onSpeechEnd ??
             function () {
                 Log.log("VoiceController.onSpeechEnd()");
+            };
+        this.onSpeechContinuing =
+            callbacks.onSpeechContinuing ??
+            function (audio: Float32Array) {
+                Log.log("VoiceController.onSpeechContinuing()");
             };
     }
 
