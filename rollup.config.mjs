@@ -34,6 +34,14 @@ export default [
         },
         plugins: plugins,
     },
+    {
+        input: "src/third-party/ricky-vad/worklet.ts",
+        output: {
+            file: "dist/audio-capture.worklet.js",
+            format: "cjs",
+        },
+        plugins: plugins,
+    },
     // // manual moonshine-ify from CDN
     // {
     //     input: "src/manual.ts",

@@ -1,10 +1,10 @@
 {
   "name": "@moonshine-ai/moonshine-js",
-  "version": "0.1.29",
+  "version": "0.2.0",
   "description": "On-device speech-to-text and voice control for web applications with Moonshine.",
   "type": "module",
   "scripts": {
-    "build": "npm run docs && npx rollup --config",
+    "build": "npm run docs && npx rollup --config && cp src/third-party/ten-vad/ten_vad.wasm dist/ten_vad.wasm",
     "dev": "npm run build && npx vite",
     "docs": "npx typedoc"
   },
@@ -23,6 +23,7 @@
     "@rollup/plugin-node-resolve": "^15.3.0",
     "@rollup/plugin-terser": "^0.4.4",
     "@rollup/plugin-typescript": "^12.1.1",
+    "@types/audioworklet": "^0.0.92",
     "rollup": "^4.27.4",
     "rollup-plugin-import-css": "^3.5.8",
     "rollup-plugin-svg-import": "^3.0.0",

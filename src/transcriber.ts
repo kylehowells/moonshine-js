@@ -1,8 +1,9 @@
 import { Settings } from "./constants";
 import MoonshineModel from "./model";
 import MoonshineError from "./error";
-import { AudioNodeVAD } from "@ricky0123/vad-web";
 import Log from "./log";
+import { AudioCapture } from "./audioCapture";
+import { VAD } from "./vad";
 
 /**
  * Callbacks are invoked at different phases of the lifecycle as audio is transcribed. You can control the behavior of the application
@@ -20,17 +21,17 @@ import Log from "./log";
  *
  * @property onTranscribeStopped() - called once when transcription stops
  *
- * @property onTranscriptionUpdated(text: string) - when `useVAD === false` (i.e., streaming mode), this callback is invoked on a rapid
- * interval ({@link Settings.STREAM_UPDATE_INTERVAL}), with the speculative transcription of the audio.
+ * @property onTranscriptionUpdated(text: string) - when `partialUpdates === false` (i.e., streaming mode), this callback is invoked rapidly
+ * with the speculative transcription of the current audio. It will not be called more than once every {@link Settings.STT_MINIMUM_INTERVAL_MS}.
  *
- * @property onTranscriptionCommitted(text: string, buffer?: AudioBuffer) - called every time a transcript is "committed"; when `useVAD === false` (streaming mode),
- * the transcript is committed between brief pauses in speech. When `useVAD === true`, the transcript is committed after speech events, or during brief pauses in long speech events.
+ * @property onTranscriptionCommitted(text: string, buffer?: AudioBuffer) - called every time a transcript is "committed"; when `partialUpdates === false` (streaming mode),
+ * the transcript is committed between brief pauses in speech. When `partialUpdates === true`, the transcript is committed after speech events, or during brief pauses in long speech events.
  *
- * @property onFrame(probability, frame, ema) - called every frame of audio
- * 
  * @property onSpeechStart() - called when the VAD model detects the start of speech
  *
  * @property onSpeechEnd() - called when the VAD model detects the end of speech
+ *
+ * @property onSpeechContinuing() - called when the VAD model detects continuing speech
  *
  * @interface
  */
@@ -47,15 +48,15 @@ interface TranscriberCallbacks {
 
     onTranscribeStopped: () => any;
 
-    onTranscriptionUpdated: (text: string) => any;
+    onTranscriptionUpdated: (text: string, audio: Float32Array) => any;
 
-    onTranscriptionCommitted: (text: string, buffer?: AudioBuffer) => any;
-
-    onFrame: (probs, frame, ema) => any;
+    onTranscriptionCommitted: (text: string, audio: Float32Array) => any;
 
     onSpeechStart: () => any;
 
-    onSpeechEnd: () => any;
+    onSpeechContinuing: (audio: Float32Array) => any;
+
+    onSpeechEnd: (audio: Float32Array) => any;
 }
 
 const defaultTranscriberCallbacks: TranscriberCallbacks = {
@@ -77,118 +78,23 @@ const defaultTranscriberCallbacks: TranscriberCallbacks = {
     onTranscribeStopped: function () {
         Log.log("Transcriber.onTranscribeStopped()");
     },
-    onTranscriptionUpdated: function (text: string) {
+    onTranscriptionUpdated: function (text: string, audio: Float32Array) {
         Log.log("Transcriber.onTranscriptionUpdated(" + text + ")");
     },
-    onTranscriptionCommitted: function (text: string, buffer?: AudioBuffer) {
+    onTranscriptionCommitted: function (text: string, audio: Float32Array) {
         Log.log("Transcriber.onTranscriptionCommitted(" + text + ")");
-    },
-    onFrame: function (probs, frame, ema) {
-        Log.log("Transcriber.onFrame()");
     },
     onSpeechStart: function () {
         Log.log("Transcriber.onSpeechStart()");
     },
-    onSpeechEnd: function () {
+    onSpeechContinuing: function (audio: Float32Array) {
+        Log.log("Transcriber.onSpeechContinuing()");
+    },
+    onSpeechEnd: function (audio: Float32Array) {
         Log.log("Transcriber.onSpeechEnd()");
     },
 };
 
-class SpeechBuffer {
-    private buffer: Float32Array;
-    private frameCount: number;
-    public frameEMA: number;
-    private speechEMA: (value: number) => any;
-    private useVAD: boolean;
-
-    constructor(useVAD: boolean) {
-        this.useVAD = useVAD;
-        this.flush();
-    }
-
-    public flush(): void {
-        this.buffer = new Float32Array(
-            this.maxCommitInterval() * Settings.FRAME_SIZE
-        );
-        this.speechEMA = this.ema(Settings.STREAM_COMMIT_EMA_PERIOD);
-        this.frameEMA = 0.0;
-        this.frameCount = 0;
-    }
-
-    public set(frame, p = undefined): void {
-        this.buffer.set(frame, this.frameCount * Settings.FRAME_SIZE);
-        if (p) this.updateEMA(p);
-        this.frameCount += 1;
-    }
-
-    public updateEMA(p): void {
-        this.frameEMA = this.speechEMA(p.isSpeech);
-    }
-
-    public subarray(): Float32Array {
-        return this.buffer.subarray(0, this.frameCount * Settings.FRAME_SIZE);
-    }
-
-    public copy(): Float32Array {
-        return this.buffer.slice(0, this.frameCount * Settings.FRAME_SIZE);
-    }
-
-    public hasFrames(): boolean {
-        return this.frameCount > 0;
-    }
-
-    public shouldSet(): boolean {
-        return this.frameCount <= this.maxCommitInterval();
-    }
-
-    public shouldUpdate(): boolean {
-        return (
-            this.frameCount < this.maxCommitInterval() &&
-            this.frameCount % Settings.STREAM_UPDATE_INTERVAL === 0
-        );
-    }
-
-    public shouldCommit(): boolean {
-        if (
-            this.frameEMA <= 0.5 &&
-            this.frameCount >= this.minCommitInterval() &&
-            this.frameCount < this.maxCommitInterval()
-        ) {
-            Log.log(`Speech pause, frameCount: ${this.frameCount}`);
-        } else if (this.frameCount === this.maxCommitInterval()) {
-            Log.log(`Forced commit, frameCount: ${this.frameCount}`);
-        }
-        return (
-            this.frameCount === this.maxCommitInterval() ||
-            (this.frameEMA <= Settings.STREAM_COMMIT_EMA_THRESHOLD &&
-                this.frameCount >= this.minCommitInterval())
-        );
-    }
-
-    private ema(period: number): (value: number) => number {
-        const k = 2 / (period + 1);
-        let emaPrev = null;
-
-        return function update(value: number): number {
-            if (emaPrev === null) {
-                emaPrev = value; // initialize with first value
-            } else {
-                emaPrev = value * k + emaPrev * (1 - k);
-            }
-            return emaPrev;
-        };
-    }
-
-    private minCommitInterval(): number {
-        return Settings.STREAM_COMMIT_MIN_INTERVAL;
-    }
-
-    private maxCommitInterval(): number {
-        return this.useVAD
-            ? Settings.VAD_COMMIT_INTERVAL
-            : Settings.STREAM_COMMIT_MAX_INTERVAL;
-    }
-}
 
 /**
  * Implements real-time transcription of an audio stream sourced from a WebAudio-compliant MediaStream object.
@@ -198,12 +104,15 @@ class SpeechBuffer {
 class Transcriber {
     private static models: Map<string, MoonshineModel> = new Map();
     private sttModel: MoonshineModel;
-    private vadModel: AudioNodeVAD;
+    private vad: VAD;
+    private audioCapture: AudioCapture;
+    private mediaStream: MediaStream;
+    private isSttRunning: boolean = false;
+    private lastSttFinishedTimeMs: number = 0;  // In milliseconds.
     callbacks: TranscriberCallbacks;
 
-    private useVAD: boolean;
-    private mediaStream: MediaStream;
-    private speechBuffer: SpeechBuffer;
+    private partialUpdates: boolean;
+    private currentVoiceAudioBuffer: Float32Array;
 
     protected audioContext: AudioContext;
     public isActive: boolean = false;
@@ -219,7 +128,7 @@ class Transcriber {
      * transcription lifecycle. For transcription-only use cases, you should define the {@link TranscriberCallbacks} yourself;
      * when using the transcriber for voice control, you should create a {@link VoiceController} and pass it in.
      *
-     * @param useVAD A boolean specifying whether or not to use Voice Activity Detection (VAD) for deciding when to perform transcriptions.
+     * @param partialUpdates A boolean specifying whether to give partial transcriptions updates during speech.
      * When set to `true`, the transcriber will only process speech at the end of each chunk of voice activity; when set to `false`, the transcriber will
      * operate in streaming mode, generating continuous transcriptions on a rapid interval.
      *
@@ -265,7 +174,7 @@ class Transcriber {
     public constructor(
         modelURL: string,
         callbacks: Partial<TranscriberCallbacks> = {},
-        useVAD: boolean = true,
+        partialUpdates: boolean = true,
         precision: string = "quantized"
     ) {
         this.callbacks = { ...defaultTranscriberCallbacks, ...callbacks };
@@ -274,7 +183,7 @@ class Transcriber {
         if (!Transcriber.models.has(modelURL))
             Transcriber.models.set(modelURL, new MoonshineModel(modelURL, precision));
         this.sttModel = Transcriber.models.get(modelURL);
-        this.useVAD = useVAD;
+        this.partialUpdates = partialUpdates;
         this.audioContext = new AudioContext();
     }
 
@@ -290,92 +199,23 @@ class Transcriber {
             throw err;
         }
 
-        // behavior
-        // useVAD:  commit every 30s or onSpeechEnd
-        // !useVAD: update every updateInterval frames; commit on detected pause (w/ EMA below threshold) occurring between min and max interval OR on max.
-        this.speechBuffer = new SpeechBuffer(this.useVAD);
-        var isTalking = false;
-
-        const onFrameProcessed = (p, frame) => {
-            this.speechBuffer.updateEMA(p);
-            this.callbacks.onFrame(p, frame, this.speechBuffer.frameEMA);
-            if (isTalking) {
-                if (this.speechBuffer.shouldSet()) {
-                    this.speechBuffer.set(frame);
-                }
-                if (this.speechBuffer.hasFrames()) {
-                    // update
-                    if (
-                        !this.useVAD &&
-                        this.speechBuffer.shouldUpdate() &&
-                        !this.speechBuffer.shouldCommit()
-                    ) {
-                        this.sttModel
-                            ?.generate(this.speechBuffer.subarray())
-                            .then((text) => {
-                                this.callbacks.onTranscriptionUpdated(text);
-                            })
-                            .catch((err) => {
-                                Log.error("Generation misfire: " + err);
-                            });
-                    }
-                    // commit
-                    else if (this.speechBuffer.shouldCommit()) {
-                        // in this case we need to copy the buffer so that it doesn't get cleared before the inference happens
-                        var tmpBuffer = this.speechBuffer.copy();
-                        this.sttModel
-                            ?.generate(tmpBuffer)
-                            .then((text) => {
-                                // buffer is about to be cleared; commit the transcript
-                                if (text) {
-                                    this.callbacks.onTranscriptionCommitted(
-                                        text,
-                                        this.getAudioBuffer(tmpBuffer)
-                                    );
-                                }
-                            })
-                            .catch((err) => {
-                                Log.error("Generation misfire: " + err);
-                            });
-                    }
-                }
-                if (this.speechBuffer.shouldCommit()) {
-                    // clear buffer (leave some overhang?)
-                    this.speechBuffer.flush();
-                }
-            }
-        };
-
-        this.vadModel = await AudioNodeVAD.new(this.audioContext, {
-            onFrameProcessed: onFrameProcessed,
-            onVADMisfire: () => {
-                Log.log("Transcriber.onVADMisfire()");
+        this.vad = new VAD({
+            onVoiceStart: (audio: Float32Array) => {
+                this.onVoiceStart(audio);
             },
-            onSpeechStart: () => {
-                Log.log("Transcriber.onSpeechStart()");
-                this.callbacks.onSpeechStart();
-                isTalking = true;
+            onVoiceEnd: (audio: Float32Array) => {
+                this.onVoiceEnd(audio);
             },
-            onSpeechEnd: (floatArray) => {
-                Log.log("Transcriber.onSpeechEnd()");
-                this.callbacks.onSpeechEnd();
-                var tmpBuffer = this.speechBuffer.copy();
-                this.sttModel?.generate(tmpBuffer).then((text) => {
-                    if (text) {
-                        this.callbacks.onTranscriptionCommitted(
-                            text,
-                            this.getAudioBuffer(tmpBuffer)
-                        );
-                    }
-                });
-                this.speechBuffer.flush();
-                isTalking = false;
+            onVoiceContinuing: (audio: Float32Array) => {
+                this.onVoiceContinuing(audio);
             },
-            model: "v5",
-            baseAssetPath: Settings.BASE_ASSET_PATH.SILERO_VAD,
-            onnxWASMBasePath: Settings.BASE_ASSET_PATH.ONNX_RUNTIME,
+            probabilityWindowSize: Settings.VAD_PROBABILITY_WINDOW_SIZE,
+            lookBehindSampleCount: Settings.VAD_LOOK_BEHIND_SAMPLE_COUNT,
+            threshold: Settings.TEN_VAD_THRESHOLD,
+            frameSize: Settings.TEN_VAD_FRAME_SIZE,
+            voiceMaxSampleCount: (Settings.SPEECH_MAX_DURATION_MS * 16000) / 1000, // Convert milliseconds to samples at 16000 Hz
         });
-        this.attachStream(this.mediaStream);
+        await this.vad.load();
         this.callbacks.onModelLoaded();
     }
 
@@ -387,17 +227,26 @@ class Transcriber {
      */
     public attachStream(stream: MediaStream) {
         if (stream) {
-            if (this.vadModel) {
-                var sourceNode = new MediaStreamAudioSourceNode(
-                    this.audioContext,
-                    {
-                        mediaStream: stream,
-                    }
-                );
-                this.vadModel.receive(sourceNode);
+            if (this.vad) {
                 Log.log(
                     "Transcriber.attachStream(): VAD set to receive source node from stream."
                 );
+                this.audioCapture = new AudioCapture({
+                    stream: stream,
+                    audioContext: this.audioContext as AudioContext,
+                    workletURL: Settings.BASE_ASSET_PATH.AUDIO_WORKLET,
+                    frameSize: Settings.TEN_VAD_FRAME_SIZE,
+                    onAudioCapture: (audio: Float32Array) => {
+                        this.onAudioCapture(audio);
+                    },
+                    onStart: () => {
+                        console.log("onStart");
+                    },
+                    onStop: () => {
+                        console.log("onStop");
+                    },
+                });
+                this.audioCapture.init();
             } else {
                 // save stream to attach later, after loading
                 this.mediaStream = stream;
@@ -445,13 +294,14 @@ class Transcriber {
             // load model if not loaded
             if (
                 (!this.sttModel.isLoaded() && !this.sttModel.isLoading()) ||
-                this.vadModel === undefined
+                this.vad === undefined
             ) {
                 await this.load();
             }
 
             this.callbacks.onTranscribeStarted();
-            this.vadModel.start();
+            this.vad.start();
+            this.audioCapture.start();
             this.audioContext.resume();
             setTimeout(() => {
                 if (this.audioContext.state === "suspended") {
@@ -469,9 +319,61 @@ class Transcriber {
     public stop() {
         this.isActive = false;
         this.callbacks.onTranscribeStopped();
-        if (this.vadModel) {
-            this.vadModel.pause();
+        this.vad.stop();
+        this.audioCapture.stop();
+    }
+
+    private onAudioCapture(audio_float32: Float32Array) {
+        this.vad.processAudio(audio_float32);
+    }
+
+    private onVoiceStart(audio: Float32Array) {
+        this.lastSttFinishedTimeMs = Date.now();
+        this.currentVoiceAudioBuffer = audio;
+        this.callbacks.onSpeechStart();
+    }
+
+    private onVoiceEnd(audio: Float32Array) {
+        // Make a copy of this audio buffer so that the transcription callback captures
+        // the current version, since the original audio buffer is passed by reference.
+        const localAudioBuffer = Float32Array.from(audio);
+        this.currentVoiceAudioBuffer = new Float32Array(0);
+        this.callbacks.onSpeechEnd(localAudioBuffer);
+        this.isSttRunning = true;
+        this.sttModel?.generate(localAudioBuffer).then((text) => {
+            this.callbacks.onTranscriptionCommitted(text, localAudioBuffer);
+            this.lastSttFinishedTimeMs = Date.now();
+            this.isSttRunning = false;
+        });
+    }
+
+    private onVoiceContinuing(audio: Float32Array) {
+        this.currentVoiceAudioBuffer = Float32Array.from(audio);
+        // Make a copy of this audio buffer so that the transcription callback captures
+        // the current version, since the original audio buffer is passed by reference.
+        const localAudioBuffer = Float32Array.from(audio);
+        this.callbacks.onSpeechContinuing(localAudioBuffer);
+        if (this.isSttRunning || !this.partialUpdates) {
+            return;
         }
+        const currentTimeMs = Date.now();
+        const timeSinceLastSttFinishedMs = currentTimeMs - this.lastSttFinishedTimeMs;
+        // Put in a fallback in case the STT model errors out and doesn't hit the callback
+        // that normally clears this flag.
+        if (timeSinceLastSttFinishedMs > 10000) {
+            this.isSttRunning = false;
+        }
+        // Don't run the STT model more often than it would be useful, to avoid spamming the client
+        // with too many updates on faster devices.
+        if (timeSinceLastSttFinishedMs < Settings.STT_MINIMUM_INTERVAL_MS) {
+            return;
+        }
+        this.isSttRunning = true;
+        this.sttModel?.generate(this.currentVoiceAudioBuffer).then((text) => {
+            this.callbacks.onTranscriptionUpdated(text, localAudioBuffer);
+            this.isSttRunning = false;
+            this.lastSttFinishedTimeMs = Date.now();
+        });
     }
 }
 

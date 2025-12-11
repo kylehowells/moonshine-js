@@ -9,7 +9,7 @@ const historyWrapper = document.getElementById("historyWrapper")
 
 var pastText = ""
 
-const useVAD = false // transcribers will use streaming mode, rather than VAD chunks
+const partialUpdates = true // transcribers will use streaming mode, rather than VAD chunks
 
 const callbacks = {
     onPermissionsRequested() {
@@ -32,12 +32,17 @@ const callbacks = {
         state.innerHTML = "Started. Waiting for speech."
     },
     onSpeechStart() {
+        console.log("Speech started.");
         state.innerHTML = "Speech started. Listening."
     },
     onSpeechEnd() {
+        console.log("Speech ended.");
         state.innerHTML = "Speech ended."
     },
+    onSpeechContinuing(audio) {
+    },
     onTranscriptionCommitted(text) {
+        console.log("Transcript committed:", text);
         if (text) {
             state.innerHTML = "Transcript committed."
             pastText = `${pastText} <br> ${text}`
@@ -48,7 +53,8 @@ const callbacks = {
             });
         }
     },
-    onTranscriptionUpdated(text) {
+    onTranscriptionUpdated(text, audio) {
+        console.log("Transcript updated:", text);
         if (text) {
             state.innerHTML = "Transcript updated."
             history.innerHTML = `${pastText} <br> ${text}`
@@ -63,10 +69,12 @@ const callbacks = {
     },
 }
 
+Moonshine.Settings.BASE_ASSET_PATH.AUDIO_WORKLET = "audio-capture.worklet.js"
+
 var microphoneTranscriber = new Moonshine.MicrophoneTranscriber(
     "model/base",
     callbacks,
-    useVAD
+    partialUpdates
 );
 // Start loading the models before the user clicks the button. This
 // isn't strictly necessary since .start() will load the model if it's not
@@ -89,13 +97,13 @@ var audioTranscriber = new Moonshine.MediaElementTranscriber(
     document.getElementById("audio"),
     "model/base",
     callbacks,
-    useVAD 
+    partialUpdates 
 );
 audioTranscriber.load();
 
 var videoCaptioner = new Moonshine.VideoCaptioner(
     document.getElementById("video"),
     "model/base",
-    useVAD
+    partialUpdates
 )
 videoCaptioner.load();

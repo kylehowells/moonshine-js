@@ -1,3 +1,8 @@
 {
-    "exclude": ["*.svg", "*.css", "examples"]
+    "exclude": ["*.svg", "*.css", "examples"],
+    "compilerOptions": {
+        "lib": ["ESNext", "DOM"],
+        "types": ["audioworklet"],
+        "target": "es2020"
+    }
 }
