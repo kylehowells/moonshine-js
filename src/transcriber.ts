@@ -35,6 +35,13 @@ import { VAD } from "./vad";
  *
  * @interface
  */
+export interface WordTiming {
+    word: string;
+    start: number;
+    end: number;
+    confidence: number;
+}
+
 interface TranscriberCallbacks {
     onPermissionsRequested: () => any;
 
