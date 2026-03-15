@@ -362,15 +362,13 @@ export default class MoonshineModel {
                     audioDuration,
                     (id: number) => llamaTokenizer.decode([id]),
                     (id: number) => {
-                        // Get raw token for word boundary detection
-                        // llama-tokenizer-js vocab uses ▁ prefix for word starts
-                        const decoded = llamaTokenizer.decode([id]);
-                        // Check if original vocab entry starts with ▁
-                        const vocab = llamaTokenizer.vocab;
-                        if (vocab && id < vocab.length) {
-                            return vocab[id] || decoded;
+                        // Get raw token string for word boundary detection.
+                        // llamaTokenizer.vocabById preserves the ▁ prefix.
+                        const vocabById = llamaTokenizer.vocabById;
+                        if (vocabById && id < vocabById.length) {
+                            return vocabById[id] || "";
                         }
-                        return decoded;
+                        return llamaTokenizer.decode([id]);
                     }
                 );
             }
