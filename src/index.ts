@@ -5,7 +5,7 @@ import {
 } from "./mediaElementTranscriber";
 import MicrophoneTranscriber from "./microphoneTranscriber";
 import MoonshineSpeechRecognition from "./webSpeechPolyfill";
-import { Transcriber, TranscriberCallbacks } from "./transcriber";
+import { Transcriber, TranscriberCallbacks, WordTiming } from "./transcriber";
 import { Settings } from "./constants";
 import {
     VoiceController,
@@ -24,6 +24,7 @@ export {
     MediaElementTranscriber,
     VideoCaptioner,
     TranscriberCallbacks,
+    WordTiming,
     VoiceController,
     KeywordSpotter,
     IntentClassifier,

@@ -2,6 +2,7 @@ import * as ort from "onnxruntime-web";
 import llamaTokenizer from "llama-tokenizer-js";
 import { Settings } from "./constants";
 import Log from "./log";
+import { WordTiming, buildWordTimings } from "./wordAlignment";
 
 function argMax(array) {
     return [].map
@@ -194,23 +195,36 @@ export default class MoonshineModel {
 
     /**
      * Generate a transcription of the passed audio.
-     * 
+     *
      * @param audio A `Float32Array` containing raw audio samples from an audio source (e.g., a wav file, or a user's microphone)
      * @returns A `Promise<string>` that resolves with the generated transcription.
      */
     public async generate(audio: Float32Array): Promise<string> {
+        const result = await this.generateWithTimestamps(audio);
+        return result?.text;
+    }
+
+    /**
+     * Generate a transcription with optional word-level timestamps.
+     *
+     * If the decoder model has cross_attentions outputs (decoder_with_attention),
+     * word timestamps are computed via DTW alignment. Otherwise, only text is returned.
+     *
+     * @param audio A `Float32Array` containing raw audio samples
+     * @returns A `Promise` resolving with text and optional word timings.
+     */
+    public async generateWithTimestamps(audio: Float32Array): Promise<{ text: string; words?: WordTiming[] } | undefined> {
         if (this.isLoaded()) {
             const t0 = performance.now();
             const maxLen = Math.trunc(audio.length / 16000 * 14);
+            const audioDuration = audio.length / 16000;
 
-            // Check for repetitive ending in the audio
             var encoderInput = {
                 input_values: new ort.Tensor("float32", audio, [
                     1,
                     audio.length,
                 ]),
             };
-            // Newer optimum exporters add an attention mask input.
             var encoderAttentionMask = undefined;
             if (this.model.encoder.inputNames.includes("attention_mask")) {
                 var maskData = new BigInt64Array(audio.length);
@@ -246,6 +260,17 @@ export default class MoonshineModel {
                 ).flat()
             );
 
+            // Check if decoder has cross-attention outputs
+            const hasAttention = this.model.decoder.outputNames.some(
+                (name: string) => name.startsWith("cross_attentions.")
+            );
+            const attnOutputNames = hasAttention
+                ? this.model.decoder.outputNames.filter((name: string) =>
+                      name.startsWith("cross_attentions.")
+                  )
+                : [];
+            const crossAttentionSteps: Float32Array[] = [];
+
             var tokens = [this.decoderStartTokenID];
             var inputIDs = [tokens];
 
@@ -271,6 +296,17 @@ export default class MoonshineModel {
                 var nextToken = argMax(logits);
                 tokens.push(nextToken);
 
+                // Collect cross-attention if available
+                if (hasAttention) {
+                    for (const attnName of attnOutputNames) {
+                        const attnTensor = decoderOutput[attnName];
+                        if (attnTensor) {
+                            const attnData = await attnTensor.getData();
+                            crossAttentionSteps.push(new Float32Array(attnData));
+                        }
+                    }
+                }
+
                 if (nextToken == this.eosTokenID) break;
                 inputIDs = [[nextToken]];
 
@@ -286,7 +322,60 @@ export default class MoonshineModel {
                 });
             }
             this.lastLatency = performance.now() - t0;
-            return llamaTokenizer.decode(tokens.slice(0, -1));
+            const text = llamaTokenizer.decode(tokens.slice(0, -1));
+
+            // Build word timestamps if attention was collected
+            let words: WordTiming[] | undefined = undefined;
+            if (crossAttentionSteps.length > 0 && tokens.length > 2) {
+                const numLayers = attnOutputNames.length;
+                const numSteps = crossAttentionSteps.length / numLayers;
+                // Each step has numLayers entries, each [1, heads, 1, encFrames]
+                // Get dimensions from first entry
+                const firstStep = crossAttentionSteps[0];
+                const numHeads = this.shape.numKVHeads;
+                const encFrames = firstStep.length / numHeads; // [heads * encFrames]
+
+                // Rearrange from [step0_L0, step0_L1, ..., step1_L0, ...]
+                // to [layers*heads, totalSteps, encFrames]
+                const totalSize = numLayers * numHeads * numSteps * encFrames;
+                const rearranged = new Float32Array(totalSize);
+                for (let s = 0; s < numSteps; s++) {
+                    for (let l = 0; l < numLayers; l++) {
+                        const src = crossAttentionSteps[s * numLayers + l];
+                        for (let h = 0; h < numHeads; h++) {
+                            const dstOffset = ((l * numHeads + h) * numSteps + s) * encFrames;
+                            const srcOffset = h * encFrames;
+                            for (let e = 0; e < encFrames; e++) {
+                                rearranged[dstOffset + e] = src[srcOffset + e];
+                            }
+                        }
+                    }
+                }
+
+                words = buildWordTimings(
+                    rearranged,
+                    numLayers,
+                    numHeads,
+                    numSteps,
+                    encFrames,
+                    tokens,
+                    audioDuration,
+                    (id: number) => llamaTokenizer.decode([id]),
+                    (id: number) => {
+                        // Get raw token for word boundary detection
+                        // llama-tokenizer-js vocab uses ▁ prefix for word starts
+                        const decoded = llamaTokenizer.decode([id]);
+                        // Check if original vocab entry starts with ▁
+                        const vocab = llamaTokenizer.vocab;
+                        if (vocab && id < vocab.length) {
+                            return vocab[id] || decoded;
+                        }
+                        return decoded;
+                    }
+                );
+            }
+
+            return { text, words };
         } else {
             Log.warn(
                 "MoonshineModel.generate(): Tried to call generate before the model was loaded."

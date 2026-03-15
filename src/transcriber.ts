@@ -35,12 +35,8 @@ import { VAD } from "./vad";
  *
  * @interface
  */
-export interface WordTiming {
-    word: string;
-    start: number;
-    end: number;
-    confidence: number;
-}
+import { WordTiming } from "./wordAlignment";
+export { WordTiming } from "./wordAlignment";
 
 interface TranscriberCallbacks {
     onPermissionsRequested: () => any;
@@ -55,9 +51,9 @@ interface TranscriberCallbacks {
 
     onTranscribeStopped: () => any;
 
-    onTranscriptionUpdated: (text: string, audio: Float32Array) => any;
+    onTranscriptionUpdated: (text: string, audio: Float32Array, words?: WordTiming[]) => any;
 
-    onTranscriptionCommitted: (text: string, audio: Float32Array) => any;
+    onTranscriptionCommitted: (text: string, audio: Float32Array, words?: WordTiming[]) => any;
 
     onSpeechStart: () => any;
 
@@ -347,8 +343,8 @@ class Transcriber {
         this.currentVoiceAudioBuffer = new Float32Array(0);
         this.callbacks.onSpeechEnd(localAudioBuffer);
         this.isSttRunning = true;
-        this.sttModel?.generate(localAudioBuffer).then((text) => {
-            this.callbacks.onTranscriptionCommitted(text, localAudioBuffer);
+        this.sttModel?.generateWithTimestamps(localAudioBuffer).then((result) => {
+            this.callbacks.onTranscriptionCommitted(result?.text, localAudioBuffer, result?.words);
             this.lastSttFinishedTimeMs = Date.now();
             this.isSttRunning = false;
         });
@@ -376,8 +372,8 @@ class Transcriber {
             return;
         }
         this.isSttRunning = true;
-        this.sttModel?.generate(this.currentVoiceAudioBuffer).then((text) => {
-            this.callbacks.onTranscriptionUpdated(text, localAudioBuffer);
+        this.sttModel?.generateWithTimestamps(this.currentVoiceAudioBuffer).then((result) => {
+            this.callbacks.onTranscriptionUpdated(result?.text, localAudioBuffer, result?.words);
             this.isSttRunning = false;
             this.lastSttFinishedTimeMs = Date.now();
         });
